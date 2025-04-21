@@ -1,53 +1,66 @@
 import requests
 import time
-from datetime import datetime, timedelta
-from collections import defaultdict
-from config import repo_owner, repo_name, tokens
+import random
+import json
+from config import GITHUB_TOKEN, PROXIES, CAPTCHA_API_KEY, REPO_URL
 
-# Geçici bloklama için
-block_until = None
-star_logs = defaultdict(list)
+# GitHub API Header
+headers = {
+    'Authorization': f'token {GITHUB_TOKEN}'
+}
 
-# GitHub API URL'si
-api_url = f"https://api.github.com/user/starred/{repo_owner}/{repo_name}"
+# Proxy ile istek atma
+def get_proxy():
+    return random.choice(PROXIES)
 
-# Yıldızları takip etme fonksiyonu
-def track_stars():
-    global block_until
-    now = datetime.utcnow()
+# 2Captcha ile captcha çözme
+def solve_captcha(api_key, page_url):
+    url = "http://2captcha.com/in.php"
+    payload = {
+        "key": api_key,
+        "method": "userrecaptcha",
+        "googlekey": "YOUR_GOOGLE_RECAPTCHA_SITE_KEY",
+        "pageurl": page_url
+    }
+    
+    response = requests.post(url, data=payload)
+    captcha_id = response.text.split('|')[1]
+    
+    solution_url = f'http://2captcha.com/res.php?key={api_key}&action=get&id={captcha_id}'
+    solution = requests.get(solution_url).text
+    return solution
 
-    # Eğer bloklama aktifse
-    if block_until and now < block_until:
-        print(f"[+] Bot saldırısı algılandı! Repo 1 saat boyunca bloklandı.")
-        return
+# Star atma işlemi
+def star_repo():
+    # Proxy ayarı
+    proxy = get_proxy()
+    proxies = {"http": proxy, "https": proxy}
+    
+    response = requests.put(f"{REPO_URL}/stargazers", headers=headers, proxies=proxies)
+    
+    if response.status_code == 204:
+        print("Star başarıyla atıldı!")
+    else:
+        print(f"Star atılamadı, durum kodu: {response.status_code}")
+        # Eğer captcha varsa çözme işlemi
+        if "captcha" in response.text.lower():
+            print("Captcha tespit edildi, çözülüyor...")
+            captcha_solution = solve_captcha(CAPTCHA_API_KEY, REPO_URL)
+            print(f"Captcha çözüldü: {captcha_solution}")
+            # Captcha'yı geçtikten sonra tekrar deneyebilirsiniz.
+            star_repo()
 
-    for token in tokens:
-        headers = {
-            "Authorization": f"token {token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
+# Rastgele bir bekleme süresi ile işlemi yap
+def wait_before_star():
+    wait_time = random.randint(10, 30)
+    time.sleep(wait_time)
 
-        # Yıldız verme isteği
-        response = requests.put(api_url, headers=headers)
-        
-        if response.status_code == 204:
-            print(f"[+] Star atıldı: {token[:10]}...")
-            star_logs[now.minute].append(token)
-        else:
-            print(f"[-] Başarısız ({response.status_code}): {token[:10]}...")
+# Botu başlat
+def start_bot():
+    while True:
+        star_repo()
+        wait_before_star()  # Her yıldız atma işleminden sonra rastgele bekleme süresi
+        print(f"{time.ctime()} - Yeni bir yıldız atıldı.")
 
-    # Son 1 dakika içindeki yıldızları kontrol et
-    recent_stars = [t for t in star_logs if (now - datetime(now.year, now.month, now.day, now.hour, t)).total_seconds() <= 60]
-    total_stars = sum(len(star_logs[t]) for t in recent_stars)
-
-    # 10'dan fazla yıldız gelirse, repo'yu blokla
-    if total_stars >= 10:
-        print("!! BOT ALGILANDI. Repo geçici olarak 1 saatlik süreyle bloklandı.")
-        block_until = now + timedelta(hours=1)
-
-    # Bir saniye bekleyerek rate limit problemi yaşamamak için
-    time.sleep(1)
-
-# Test süreci: Sürekli yıldız atma işlemi yapmak
-while True:
-    track_stars()
+if __name__ == "__main__":
+    start_bot()
